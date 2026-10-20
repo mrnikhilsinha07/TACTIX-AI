@@ -78,16 +78,16 @@ with tab1:
             reason_counts = filtered["loss_indicator"].value_counts().rename_axis("Indicator").reset_index(name="Records")
             fig = px.bar(reason_counts, x="Indicator", y="Records", title="Candidate loss indicators", text="Records")
             fig.update_layout(xaxis_title="", yaxis_title="Records")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("No records match the selected filters.")
     with right:
         if total:
             team_counts = filtered["team_losing_possession"].value_counts().head(15).rename_axis("Team").reset_index(name="Records")
             fig = px.bar(team_counts.sort_values("Records"), x="Records", y="Team", orientation="h", title="Teams with most candidate indicators")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
     st.subheader("Sample matches")
-    st.dataframe(matches, use_container_width=True, hide_index=True)
+    st.dataframe(matches, width="stretch", hide_index=True)
 
 with tab2:
     loc = filtered.dropna(subset=["loss_x", "loss_y"]).copy()
@@ -100,7 +100,7 @@ with tab2:
         )
         fig.update_yaxes(autorange="reversed")
         fig.update_layout(xaxis_range=[0, 120], yaxis_range=[80, 0])
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.caption("Coordinates are plotted in the source event coordinate system; this is not a full pitch drawing.")
     else:
         st.info("No location coordinates available for the selected records.")
@@ -114,8 +114,8 @@ with tab3:
         outcomes["share_with_shot_pct"] = (100 * outcomes["next_possession_with_shot"] / outcomes["candidate_records"]).round(1)
         fig = px.bar(outcomes, x="loss_indicator", y="share_with_shot_pct", hover_data=["candidate_records", "next_possession_with_shot"], title="Share of candidate records whose next possession contains a shot", text="share_with_shot_pct")
         fig.update_layout(xaxis_title="Candidate indicator", yaxis_title="Records (%)")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(outcomes, use_container_width=True, hide_index=True)
+        st.plotly_chart(fig, width="stretch")
+        st.dataframe(outcomes, width="stretch", hide_index=True)
     else:
         st.info("No records match the selected filters.")
 
@@ -123,9 +123,9 @@ with tab4:
     st.subheader("Validation summary")
     st.json(summary)
     st.subheader("Event type coverage")
-    st.dataframe(coverage, use_container_width=True, hide_index=True)
+    st.dataframe(coverage, width="stretch", hide_index=True)
     st.subheader("Candidate transition records")
-    st.dataframe(filtered.head(500), use_container_width=True, hide_index=True)
+    st.dataframe(filtered.head(500), width="stretch", hide_index=True)
     st.download_button(
         "Download filtered transition records (CSV)",
         data=filtered.to_csv(index=False).encode("utf-8"),
