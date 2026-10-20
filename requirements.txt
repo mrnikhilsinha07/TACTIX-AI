@@ -1,2 +1,4 @@
-requests>=2.31.0
+streamlit
 pandas>=2.0.0
+requests>=2.31.0
+plotly
