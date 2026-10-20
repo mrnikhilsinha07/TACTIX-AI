@@ -2,11 +2,11 @@
 
 **Interactive football analytics dashboard for exploring candidate possession-loss events and subsequent opponent attacks.**
 
-[![Live Dashboard](https://img.shields.io/badge/Live%20Dashboard-Open%20App-FF4B4B?logo=streamlit&logoColor=white)](https://tactix-ai-zgc29qk7pjgitffodmsjfi.streamlit.app)
+[![Live Dashboard](https://img.shields.io/badge/Live%20Dashboard-Open%20App-FF4B4B?logo=streamlit&logoColor=white)](https://tactix-ai-zqc29qk7pigitffodmsjfj.streamlit.app/)
 
 ## 🚀 Live Demo
 
-**[Open TACTIX AI](https://tactix-ai-zgc29qk7pjgitffodmsjfi.streamlit.app)**
+**[Open TACTIX AI](https://tactix-ai-zqc29qk7pigitffodmsjfj.streamlit.app/)**
 
 TACTIX AI uses **StatsBomb Open Data** from the **2022 FIFA World Cup** to explore candidate possession-loss events and whether the opponent's next possession contains a shot. It is an exploratory analysis tool—not a verified turnover classifier or a causal model.
 
