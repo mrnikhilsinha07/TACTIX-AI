@@ -200,8 +200,16 @@ if quality_warnings:
 else:
     st.caption("Basic report checks passed. This is not a full independent validation of the source data.")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    ["Overview", "Where possession was lost", "Transition outcomes", "Match analysis", "Data quality", "Team comparison"]
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+    [
+        "Overview",
+        "Where possession was lost",
+        "Transition outcomes",
+        "Match analysis",
+        "Data quality",
+        "Team comparison",
+        "Advanced analytics",
+    ]
 )
 
 with tab1:
@@ -515,6 +523,183 @@ with tab6:
                 "candidate loss caused the shot. Comparisons are affected by sample size, "
                 "opponents, match context, and the exploratory candidate-event definition."
             )
+
+
+
+with tab7:
+    st.subheader("Advanced analytics")
+    st.caption(
+        "Explore team-by-match patterns and candidate loss indicators. "
+        "All rates are descriptive associations, not causal effects."
+    )
+
+    if filtered.empty:
+        st.info("No records match the selected filters. Adjust the sidebar filters to continue.")
+    else:
+        # Team-by-match view: use only columns available in the current report.
+        st.markdown("#### Team performance by match")
+        group_columns = ["match_id", "team_losing_possession"]
+        team_match = (
+            filtered.groupby(group_columns, dropna=False)
+            .agg(
+                candidate_records=("match_id", "size"),
+                next_possession_with_shot=("opponent_possession_contains_shot", "sum"),
+            )
+            .reset_index()
+            .rename(columns={"team_losing_possession": "team"})
+        )
+        team_match["share_with_subsequent_shot_pct"] = (
+            100 * team_match["next_possession_with_shot"] / team_match["candidate_records"]
+        ).round(1)
+
+        # Add match metadata where available, without assuming optional columns exist.
+        metadata_columns = [
+            column for column in ["match_id", "match_date", "home_team", "away_team"]
+            if column in matches.columns
+        ]
+        if "match_id" in metadata_columns:
+            metadata = matches[metadata_columns].drop_duplicates(subset=["match_id"])
+            team_match = team_match.merge(metadata, on="match_id", how="left")
+            if {"home_team", "away_team"}.issubset(team_match.columns):
+                team_match["match_label"] = (
+                    team_match["home_team"].fillna("Unknown")
+                    + " vs "
+                    + team_match["away_team"].fillna("Unknown")
+                    + " ("
+                    + team_match["match_id"].astype(str)
+                    + ")"
+                )
+            else:
+                team_match["match_label"] = team_match["match_id"].astype(str)
+        else:
+            team_match["match_label"] = team_match["match_id"].astype(str)
+
+        teams_in_filtered = sorted(team_match["team"].dropna().unique().tolist())
+        chosen_teams = st.multiselect(
+            "Teams to inspect by match",
+            options=teams_in_filtered,
+            default=teams_in_filtered[: min(5, len(teams_in_filtered))],
+            key="advanced_match_teams",
+        )
+        team_match_view = team_match[team_match["team"].isin(chosen_teams)].copy()
+
+        if team_match_view.empty:
+            st.info("Select at least one team to view match-by-match results.")
+        else:
+            team_match_view = team_match_view.sort_values(
+                ["team", "match_id"], na_position="last"
+            )
+            fig = px.scatter(
+                team_match_view,
+                x="match_label",
+                y="share_with_subsequent_shot_pct",
+                color="team",
+                size="candidate_records",
+                hover_data=[
+                    "match_id",
+                    "candidate_records",
+                    "next_possession_with_shot",
+                    "share_with_subsequent_shot_pct",
+                ],
+                title="Subsequent-shot share by team and match",
+                labels={
+                    "match_label": "Match",
+                    "share_with_subsequent_shot_pct": "Records followed by a shot (%)",
+                    "team": "Team",
+                    "candidate_records": "Candidate records (bubble size)",
+                    "next_possession_with_shot": "Records followed by a shot",
+                },
+            )
+            fig.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig, width="stretch")
+            st.dataframe(team_match_view, width="stretch", hide_index=True)
+            st.download_button(
+                "Download team-by-match results (CSV)",
+                data=team_match_view.to_csv(index=False).encode("utf-8"),
+                file_name="tactix_team_match_analysis.csv",
+                mime="text/csv",
+            )
+
+        st.divider()
+        st.markdown("#### Candidate loss-indicator analysis")
+        indicator_analysis = (
+            filtered.groupby("loss_indicator", dropna=False)
+            .agg(
+                candidate_records=("match_id", "size"),
+                next_possession_with_shot=("opponent_possession_contains_shot", "sum"),
+                teams_in_sample=("team_losing_possession", "nunique"),
+                matches_in_sample=("match_id", "nunique"),
+            )
+            .reset_index()
+            .rename(columns={"loss_indicator": "candidate_loss_indicator"})
+        )
+        indicator_analysis["share_with_subsequent_shot_pct"] = (
+            100
+            * indicator_analysis["next_possession_with_shot"]
+            / indicator_analysis["candidate_records"]
+        ).round(1)
+
+        min_indicator_sample = st.slider(
+            "Minimum records per loss indicator",
+            min_value=1,
+            max_value=max(1, int(indicator_analysis["candidate_records"].max())),
+            value=min(10, max(1, int(indicator_analysis["candidate_records"].max()))),
+            key="advanced_indicator_min_sample",
+            help="Indicators below this sample size are excluded from the chart and table.",
+        )
+        indicator_view = indicator_analysis[
+            indicator_analysis["candidate_records"] >= min_indicator_sample
+        ].copy()
+
+        if indicator_view.empty:
+            st.info("No loss indicators meet the selected minimum sample size.")
+        else:
+            indicator_view = indicator_view.sort_values(
+                "share_with_subsequent_shot_pct", ascending=True
+            )
+            fig = px.bar(
+                indicator_view,
+                x="share_with_subsequent_shot_pct",
+                y="candidate_loss_indicator",
+                orientation="h",
+                text="share_with_subsequent_shot_pct",
+                hover_data=[
+                    "candidate_records",
+                    "next_possession_with_shot",
+                    "teams_in_sample",
+                    "matches_in_sample",
+                ],
+                title="Subsequent-shot share by candidate loss indicator",
+                labels={
+                    "share_with_subsequent_shot_pct": "Records followed by a shot (%)",
+                    "candidate_loss_indicator": "Candidate loss indicator",
+                    "candidate_records": "Candidate records (sample size)",
+                    "next_possession_with_shot": "Records followed by a shot",
+                    "teams_in_sample": "Teams represented",
+                    "matches_in_sample": "Matches represented",
+                },
+            )
+            st.plotly_chart(fig, width="stretch")
+            st.dataframe(
+                indicator_view.sort_values(
+                    "share_with_subsequent_shot_pct", ascending=False
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+            st.download_button(
+                "Download loss-indicator analysis (CSV)",
+                data=indicator_view.to_csv(index=False).encode("utf-8"),
+                file_name="tactix_loss_indicator_analysis.csv",
+                mime="text/csv",
+            )
+
+        st.info(
+            "Interpretation: these summaries describe how often candidate records are "
+            "followed by a shot-containing opponent possession in the available sample. "
+            "They do not establish causation, and differences can reflect opponent quality, "
+            "match context, repeated events, and the exploratory candidate-event definition."
+        )
 
 st.divider()
 st.caption(
