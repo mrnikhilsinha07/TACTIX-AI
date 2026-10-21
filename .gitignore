@@ -2,4 +2,10 @@
 __pycache__/
 *.py[cod]
 .streamlit/secrets.toml
+# Local app backups
+app_previous*.py
 
+# Generated analysis reports (keep locally)
+reports/bootstrap_stability.csv
+reports/cluster_bootstrap_summary.csv
+reports/team_cluster_bootstrap.csv
