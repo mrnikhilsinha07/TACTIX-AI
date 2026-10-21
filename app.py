@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import math
 
 import pandas as pd
 import plotly.express as px
@@ -121,6 +122,36 @@ df["loss_y"] = pd.to_numeric(df["loss_y"], errors="coerce")
 df["minute"] = pd.to_numeric(df["minute"], errors="coerce")
 df["second"] = pd.to_numeric(df["second"], errors="coerce")
 
+def wilson_interval(successes, total, z=1.96):
+    """Return the Wilson score 95% confidence interval as percentages."""
+    try:
+        n = int(total)
+        x = int(successes)
+    except (TypeError, ValueError, OverflowError):
+        return (float("nan"), float("nan"))
+    if n <= 0 or x < 0 or x > n:
+        return (float("nan"), float("nan"))
+    p = x / n
+    z2 = z * z
+    denominator = 1 + z2 / n
+    center = (p + z2 / (2 * n)) / denominator
+    margin = (z * math.sqrt((p * (1 - p) / n) + (z2 / (4 * n * n)))) / denominator
+    return (100 * max(0.0, center - margin), 100 * min(1.0, center + margin))
+
+
+def add_wilson_intervals(frame, successes_col, total_col, prefix=""):
+    """Add Wilson 95% confidence interval columns to an aggregate DataFrame."""
+    intervals = [
+        wilson_interval(successes, total)
+        for successes, total in zip(frame[successes_col], frame[total_col])
+    ]
+    low_name = f"{prefix}ci95_lower_pct"
+    high_name = f"{prefix}ci95_upper_pct"
+    frame[low_name] = [round(low, 1) if pd.notna(low) else float("nan") for low, _ in intervals]
+    frame[high_name] = [round(high, 1) if pd.notna(high) else float("nan") for _, high in intervals]
+    return frame
+
+
 def parse_bool(value):
     """Parse actual booleans and common CSV boolean representations safely."""
     if pd.isna(value):
@@ -186,6 +217,14 @@ c1.metric("Candidate transition records", f"{total:,}")
 c2.metric("Next possession contains shot", f"{with_shot:,}")
 c3.metric("Share with subsequent shot", f"{shot_rate:.1f}%")
 c4.metric("Matches in filtered data", f"{match_count:,}")
+overall_ci_low, overall_ci_high = wilson_interval(with_shot, total)
+if total:
+    st.caption(
+        f"Overall subsequent-shot share: {shot_rate:.1f}% "
+        f"(Wilson 95% confidence interval: {overall_ci_low:.1f}%–{overall_ci_high:.1f}%; "
+        f"n={total:,} candidate records). The interval assumes independent Bernoulli outcomes; "
+        "events from the same match may be correlated."
+    )
 
 st.warning(
     "Interpretation guardrail: this is exploratory analysis. A shot in the next "
@@ -430,6 +469,9 @@ with tab6:
             * team_comparison["next_possession_with_shot"]
             / team_comparison["candidate_records"]
         ).round(1)
+        team_comparison = add_wilson_intervals(
+            team_comparison, "next_possession_with_shot", "candidate_records"
+        )
 
         min_sample = st.slider(
             "Minimum candidate records per team",
@@ -489,6 +531,8 @@ with tab6:
                     "candidate_records",
                     "next_possession_with_shot",
                     "matches_in_sample",
+                    "ci95_lower_pct",
+                    "ci95_upper_pct",
                 ],
                 title="Percentage of candidate records followed by a shot",
                 labels={
@@ -502,6 +546,10 @@ with tab6:
             st.plotly_chart(fig, width="stretch")
 
             st.markdown("#### Team comparison table")
+            st.caption(
+                "95% Wilson confidence intervals quantify binomial sampling uncertainty; "
+                "they do not adjust for clustering by match or differences in opposition."
+            )
             st.dataframe(
                 comparable.sort_values(
                     "share_with_subsequent_shot_pct", ascending=False
@@ -551,6 +599,9 @@ with tab7:
         team_match["share_with_subsequent_shot_pct"] = (
             100 * team_match["next_possession_with_shot"] / team_match["candidate_records"]
         ).round(1)
+        team_match = add_wilson_intervals(
+            team_match, "next_possession_with_shot", "candidate_records"
+        )
 
         # Add match metadata where available, without assuming optional columns exist.
         metadata_columns = [
@@ -638,6 +689,9 @@ with tab7:
             * indicator_analysis["next_possession_with_shot"]
             / indicator_analysis["candidate_records"]
         ).round(1)
+        indicator_analysis = add_wilson_intervals(
+            indicator_analysis, "next_possession_with_shot", "candidate_records"
+        )
 
         min_indicator_sample = st.slider(
             "Minimum records per loss indicator",
@@ -668,6 +722,8 @@ with tab7:
                     "next_possession_with_shot",
                     "teams_in_sample",
                     "matches_in_sample",
+                    "ci95_lower_pct",
+                    "ci95_upper_pct",
                 ],
                 title="Subsequent-shot share by candidate loss indicator",
                 labels={
@@ -698,7 +754,9 @@ with tab7:
             "Interpretation: these summaries describe how often candidate records are "
             "followed by a shot-containing opponent possession in the available sample. "
             "They do not establish causation, and differences can reflect opponent quality, "
-            "match context, repeated events, and the exploratory candidate-event definition."
+            "match context, repeated events, and the exploratory candidate-event definition. "
+            "Wilson intervals assume independent binary outcomes and may be too narrow when "
+            "events are correlated within matches."
         )
 
 st.divider()
