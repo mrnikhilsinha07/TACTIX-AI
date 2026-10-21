@@ -1,3 +1,4 @@
+import numpy as np
 from pathlib import Path
 import json
 import math
@@ -150,6 +151,51 @@ def add_wilson_intervals(frame, successes_col, total_col, prefix=""):
     frame[low_name] = [round(low, 1) if pd.notna(low) else float("nan") for low, _ in intervals]
     frame[high_name] = [round(high, 1) if pd.notna(high) else float("nan") for _, high in intervals]
     return frame
+
+
+def add_match_clustered_intervals(
+    frame,
+    team_col="team_losing_possession",
+    match_col="match_id",
+    success_col="opponent_possession_contains_shot",
+    replicates=5000,
+    seed=42,
+):
+    """Add percentile-bootstrap intervals by resampling whole matches within each team."""
+    result = frame.copy()
+    lower_bounds = []
+    upper_bounds = []
+    rng = np.random.default_rng(seed)
+
+    for _, row in result.iterrows():
+        team_rows = row["_bootstrap_rows"]
+        grouped = [
+            group[success_col].astype(int).to_numpy()
+            for _, group in team_rows.groupby(match_col, sort=False)
+        ]
+        if len(grouped) < 2:
+            lower_bounds.append(float("nan"))
+            upper_bounds.append(float("nan"))
+            continue
+
+        match_successes = np.array(
+            [values.sum() for values in grouped], dtype=float
+        )
+        match_totals = np.array(
+            [len(values) for values in grouped], dtype=float
+        )
+        n_matches = len(grouped)
+        sampled = rng.integers(0, n_matches, size=(replicates, n_matches))
+        rates = (
+            match_successes[sampled].sum(axis=1)
+            / match_totals[sampled].sum(axis=1)
+        ) * 100
+        lower_bounds.append(round(float(np.quantile(rates, 0.025)), 1))
+        upper_bounds.append(round(float(np.quantile(rates, 0.975)), 1))
+
+    result["cluster_ci_lower_pct"] = lower_bounds
+    result["cluster_ci_upper_pct"] = upper_bounds
+    return result
 
 
 def parse_bool(value):
@@ -668,6 +714,130 @@ with tab7:
                 "Download team-by-match results (CSV)",
                 data=team_match_view.to_csv(index=False).encode("utf-8"),
                 file_name="tactix_team_match_analysis.csv",
+                mime="text/csv",
+            )
+
+        st.divider()
+        st.markdown("#### Team-Level Statistical Reliability")
+        st.caption(
+            "Compare Wilson intervals with match-clustered bootstrap intervals. "
+            "The bootstrap resamples whole matches within each team (5,000 replicates). "
+            "These are exploratory estimates, not definitive team rankings."
+        )
+
+        team_stats = (
+            filtered.groupby(["team_losing_possession", "match_id"], dropna=False)
+            .agg(
+                candidate_records=("opponent_possession_contains_shot", "size"),
+                next_possession_with_shot=("opponent_possession_contains_shot", "sum"),
+            )
+            .reset_index()
+        )
+        team_reliability = (
+            filtered.groupby("team_losing_possession", dropna=False)
+            .agg(
+                candidate_records=("opponent_possession_contains_shot", "size"),
+                next_possession_with_shot=("opponent_possession_contains_shot", "sum"),
+                matches_in_sample=("match_id", "nunique"),
+            )
+            .reset_index()
+            .rename(columns={"team_losing_possession": "team"})
+        )
+        team_reliability["share_with_subsequent_shot_pct"] = (
+            100 * team_reliability["next_possession_with_shot"]
+            / team_reliability["candidate_records"]
+        )
+        team_reliability = add_wilson_intervals(
+            team_reliability,
+            "next_possession_with_shot",
+            "candidate_records",
+            prefix="wilson_",
+        )
+
+        bootstrap_rows = {
+            team: group.copy()
+            for team, group in filtered.groupby("team_losing_possession", dropna=False)
+        }
+        team_reliability["_bootstrap_rows"] = team_reliability["team"].map(bootstrap_rows)
+        team_reliability = add_match_clustered_intervals(
+            team_reliability,
+            team_col="team",
+            replicates=5000,
+            seed=42,
+        )
+        team_reliability = team_reliability.drop(columns=["_bootstrap_rows"])
+        team_reliability["uncertainty_note"] = np.where(
+            team_reliability["matches_in_sample"] < 5,
+            "Few matches: interpret cautiously",
+            "Exploratory; match-clustered interval",
+        )
+
+        min_team_matches = st.slider(
+            "Minimum matches for statistical reliability view",
+            min_value=1,
+            max_value=max(1, int(team_reliability["matches_in_sample"].max())),
+            value=1,
+            key="team_reliability_min_matches",
+            help="Use this filter to focus on teams represented in more matches.",
+        )
+        reliability_view = team_reliability[
+            team_reliability["matches_in_sample"] >= min_team_matches
+        ].copy()
+
+        if reliability_view.empty:
+            st.info("No teams meet the selected minimum match count.")
+        else:
+            st.markdown("##### Subsequent-shot rate and clustered 95% interval")
+            chart_data = reliability_view.dropna(
+                subset=["cluster_ci_lower_pct", "cluster_ci_upper_pct"]
+            ).copy()
+            if not chart_data.empty:
+                chart_data["cluster_error_minus"] = (
+                    chart_data["share_with_subsequent_shot_pct"]
+                    - chart_data["cluster_ci_lower_pct"]
+                ).clip(lower=0)
+                chart_data["cluster_error_plus"] = (
+                    chart_data["cluster_ci_upper_pct"]
+                    - chart_data["share_with_subsequent_shot_pct"]
+                ).clip(lower=0)
+                fig = px.scatter(
+                    chart_data.sort_values("share_with_subsequent_shot_pct"),
+                    x="share_with_subsequent_shot_pct",
+                    y="team",
+                    error_x="cluster_error_plus",
+                    error_x_minus="cluster_error_minus",
+                    hover_data=[
+                        "candidate_records",
+                        "matches_in_sample",
+                        "wilson_ci95_lower_pct",
+                        "wilson_ci95_upper_pct",
+                        "cluster_ci_lower_pct",
+                        "cluster_ci_upper_pct",
+                    ],
+                    title="Team subsequent-shot share with match-clustered 95% intervals",
+                    labels={
+                        "share_with_subsequent_shot_pct": "Records followed by a shot (%)",
+                        "team": "Team",
+                    },
+                )
+                st.plotly_chart(fig, width="stretch")
+            st.caption(
+                "Wilson intervals assume independent binary outcomes. Clustered intervals "
+                "resample whole matches, but teams often have only a few matches; interval "
+                "estimates can therefore be unstable. Neither method adjusts for opponent "
+                "quality or other match context."
+            )
+            st.dataframe(
+                reliability_view.drop(columns=[]).sort_values(
+                    "share_with_subsequent_shot_pct", ascending=False
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+            st.download_button(
+                "Download team statistical reliability (CSV)",
+                data=reliability_view.to_csv(index=False).encode("utf-8"),
+                file_name="tactix_team_statistical_reliability.csv",
                 mime="text/csv",
             )
 
