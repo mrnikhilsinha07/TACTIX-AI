@@ -200,8 +200,8 @@ if quality_warnings:
 else:
     st.caption("Basic report checks passed. This is not a full independent validation of the source data.")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["Overview", "Where possession was lost", "Transition outcomes", "Match analysis", "Data quality"]
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["Overview", "Where possession was lost", "Transition outcomes", "Match analysis", "Data quality", "Team comparison"]
 )
 
 with tab1:
@@ -395,6 +395,126 @@ with tab5:
         file_name="tactix_filtered_transition_records.csv",
         mime="text/csv",
     )
+
+
+with tab6:
+    st.subheader("Team comparison")
+    st.caption(
+        "Compare candidate possession-loss indicators and subsequent-shot associations "
+        "within the currently selected filters. These are descriptive statistics, not causal effects."
+    )
+
+    if filtered.empty:
+        st.info("No records match the selected filters. Adjust the sidebar filters to compare teams.")
+    else:
+        team_comparison = (
+            filtered.groupby("team_losing_possession", dropna=False)
+            .agg(
+                candidate_records=("match_id", "size"),
+                next_possession_with_shot=("opponent_possession_contains_shot", "sum"),
+                matches_in_sample=("match_id", "nunique"),
+            )
+            .reset_index()
+            .rename(columns={"team_losing_possession": "team"})
+        )
+        team_comparison["share_with_subsequent_shot_pct"] = (
+            100
+            * team_comparison["next_possession_with_shot"]
+            / team_comparison["candidate_records"]
+        ).round(1)
+
+        min_sample = st.slider(
+            "Minimum candidate records per team",
+            min_value=1,
+            max_value=max(1, int(team_comparison["candidate_records"].max())),
+            value=min(20, max(1, int(team_comparison["candidate_records"].max()))),
+            help="Teams below this sample size are excluded from the chart and table below.",
+        )
+        comparable = team_comparison[
+            team_comparison["candidate_records"] >= min_sample
+        ].copy()
+
+        if comparable.empty:
+            st.info("No teams meet the selected minimum sample size.")
+        else:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Teams compared", f"{len(comparable):,}")
+            c2.metric(
+                "Candidate records in comparison",
+                f"{int(comparable['candidate_records'].sum()):,}",
+            )
+            c3.metric(
+                "Records followed by a shot",
+                f"{int(comparable['next_possession_with_shot'].sum()):,}",
+            )
+
+            st.markdown("#### Candidate records by team")
+            count_chart = comparable.sort_values("candidate_records", ascending=True)
+            fig = px.bar(
+                count_chart,
+                x="candidate_records",
+                y="team",
+                orientation="h",
+                text="candidate_records",
+                hover_data=["matches_in_sample", "next_possession_with_shot"],
+                title="Number of candidate possession-loss records",
+                labels={
+                    "candidate_records": "Candidate records",
+                    "team": "Team",
+                    "matches_in_sample": "Matches in sample",
+                    "next_possession_with_shot": "Next possessions containing a shot",
+                },
+            )
+            st.plotly_chart(fig, width="stretch")
+
+            st.markdown("#### Share with subsequent opponent-possession shot")
+            rate_chart = comparable.sort_values(
+                "share_with_subsequent_shot_pct", ascending=True
+            )
+            fig = px.bar(
+                rate_chart,
+                x="share_with_subsequent_shot_pct",
+                y="team",
+                orientation="h",
+                text="share_with_subsequent_shot_pct",
+                hover_data=[
+                    "candidate_records",
+                    "next_possession_with_shot",
+                    "matches_in_sample",
+                ],
+                title="Percentage of candidate records followed by a shot",
+                labels={
+                    "share_with_subsequent_shot_pct": "Records followed by a shot (%)",
+                    "team": "Team",
+                    "candidate_records": "Candidate records (sample size)",
+                    "next_possession_with_shot": "Next possessions containing a shot",
+                    "matches_in_sample": "Matches in sample",
+                },
+            )
+            st.plotly_chart(fig, width="stretch")
+
+            st.markdown("#### Team comparison table")
+            st.dataframe(
+                comparable.sort_values(
+                    "share_with_subsequent_shot_pct", ascending=False
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+            st.download_button(
+                "Download team comparison (CSV)",
+                data=comparable.to_csv(index=False).encode("utf-8"),
+                file_name="tactix_team_comparison.csv",
+                mime="text/csv",
+            )
+
+            st.info(
+                "Interpretation: a higher percentage means that a larger share of the "
+                "team's candidate records were followed by a shot in the next opponent "
+                "possession in this filtered sample. It does not establish that the "
+                "candidate loss caused the shot. Comparisons are affected by sample size, "
+                "opponents, match context, and the exploratory candidate-event definition."
+            )
 
 st.divider()
 st.caption(
